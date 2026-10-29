@@ -1,0 +1,94 @@
+# On every push to main: test, build and sign to check that everything works.
+# On pushing a vX.Y.Z tag: also notarize, create the GitHub release and update the cask in hyppe-cc/homebrew-tap.
+name: Release
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    # Liquid Glass needs the macOS 26 SDK.
+    runs-on: macos-26
+    env:
+      HAS_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE != '' }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Toolchain
+        run: swift --version
+
+      - name: Test
+        run: swift test
+
+      # The runner has no keychain entry: import the Developer ID certificate
+      # into a temporary keychain for this job, then delete the file.
+      - name: Import Apple certificate
+        if: env.HAS_CERTIFICATE == 'true'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          KEYCHAIN="$RUNNER_TEMP/build.keychain"
+          KEYCHAIN_PASSWORD=$(openssl rand -base64 24)
+          echo "$APPLE_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security default-keychain -s "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -t 3600 -u "$KEYCHAIN"
+          security import "$RUNNER_TEMP/certificate.p12" -k "$KEYCHAIN" -P "$APPLE_CERTIFICATE_PASSWORD" \
+            -T /usr/bin/codesign -T /usr/bin/security
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security find-identity -v -p codesigning "$KEYCHAIN"
+          rm -f "$RUNNER_TEMP/certificate.p12"
+
+      # Signs with Developer ID when the certificate is available; notarizes only on release tags.
+      - name: Build
+        env:
+          SIGN_IDENTITY: ${{ env.HAS_CERTIFICATE == 'true' && 'Developer ID Application: FERMIN GUADALUPE VILLANUEVA SALAS (4L3BNUJJZJ)' || '' }}
+          APPLE_ID: ${{ startsWith(github.ref, 'refs/tags/v') && secrets.APPLE_ID || '' }}
+          APPLE_PASSWORD: ${{ startsWith(github.ref, 'refs/tags/v') && secrets.APPLE_PASSWORD || '' }}
+          APPLE_TEAM_ID: 4L3BNUJJZJ
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then export VERSION="${GITHUB_REF_NAME#v}"; fi
+          scripts/build.sh
+
+      - name: Create release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" build/Tunnels.zip \
+            --title "Tunnels ${GITHUB_REF_NAME#v}" --generate-notes
+
+      - name: Update cask in the tap
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          TAP_DEPLOY_KEY: ${{ secrets.TAP_DEPLOY_KEY }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          SHA=$(shasum -a 256 build/Tunnels.zip | cut -d' ' -f1)
+
+          mkdir -p ~/.ssh
+          echo "$TAP_DEPLOY_KEY" > ~/.ssh/tap_key
+          chmod 600 ~/.ssh/tap_key
+          export GIT_SSH_COMMAND="ssh -i ~/.ssh/tap_key -o StrictHostKeyChecking=accept-new"
+
+          git clone git@github.com:hyppe-cc/homebrew-tap.git tap
+          cd tap
+          mkdir -p Casks
+          # The cask template lives in this repo, so changes to it ship with the release.
+          sed -E "s/^  version \".*\"/  version \"$VERSION\"/; s/^  sha256 \".*\"/  sha256 \"$SHA\"/" \
+            ../packaging/tunnels.rb > Casks/tunnels.rb
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Casks/tunnels.rb
+          git commit -m "tunnels $VERSION"
+          git push

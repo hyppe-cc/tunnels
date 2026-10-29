@@ -1,0 +1,9 @@
+tunnel: 44444444-4444-4444-8444-444444444444
+credentials-file: /tmp/tunnel-fixtures/44444444-4444-4444-8444-444444444444.json
+
+ingress:
+  - hostname: docs.example.com
+    service: https://docs.test
+    originRequest:
+      httpHostHeader: docs.test
+  - service: http_status:404

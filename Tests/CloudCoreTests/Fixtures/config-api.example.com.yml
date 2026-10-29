@@ -1,0 +1,7 @@
+tunnel: 22222222-2222-4222-8222-222222222222
+credentials-file: /tmp/tunnel-fixtures/22222222-2222-4222-8222-222222222222.json
+
+ingress:
+  - hostname: api.example.com
+    service: http://127.0.0.1:8787
+  - service: http_status:404
