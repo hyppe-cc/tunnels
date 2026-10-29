@@ -5,8 +5,8 @@
 set -euo pipefail
 cd "${0:A:h}/.."
 
-# Version: the VERSION variable (set by the Action from the tag) or the latest git tag.
-VERSION="${VERSION:-$(git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//' || true)}"
+# Version: the VERSION variable, else the VERSION file.
+VERSION="${VERSION:-$(cat VERSION 2>/dev/null || true)}"
 VERSION="${VERSION:-0.0.0}"
 BUILD_NUMBER="$(git rev-list --count HEAD 2>/dev/null || echo 1)"
 

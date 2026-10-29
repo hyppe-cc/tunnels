@@ -1,18 +1,20 @@
-# On every push to main: test, build and sign to check that everything works.
-# On a release — pushing a vX.Y.Z tag, or running this workflow from the Actions tab with a version —
-# also notarize, create the GitHub release and update the cask in hyppe-cc/homebrew-tap.
 name: Release
 
+# Bump the version in ./VERSION and push to main: a release tagged v<version> is built and
+# published automatically (scripts/release.sh X.Y.Z does the bump). The tag and release are
+# created with GITHUB_TOKEN, so they belong to github-actions[bot].
+#
+# Every other push and pull request just tests and builds. Signing, notarizing and the Homebrew
+# cask update each run when their secrets are set and are skipped otherwise.
 on:
   push:
     branches: [main]
-    tags: ["v*"]
   pull_request:
   workflow_dispatch:
-    inputs:
-      version:
-        description: "Version to release, e.g. 1.0.0"
-        required: true
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 permissions:
   contents: write
@@ -23,19 +25,28 @@ jobs:
     runs-on: macos-26
     env:
       HAS_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE != '' }}
-      # Set on a release: from the tag, or from the version typed in the Actions tab.
-      VERSION: ${{ inputs.version || (startsWith(github.ref, 'refs/tags/v') && github.ref_name) || '' }}
+      HAS_NOTARY: ${{ secrets.APPLE_ID != '' && secrets.APPLE_PASSWORD != '' }}
+      HAS_TAP_KEY: ${{ secrets.TAP_DEPLOY_KEY != '' }}
     steps:
       - uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
 
+      # RELEASE=true when this is main and v<VERSION> hasn't been released yet.
       - name: Check version
-        if: env.VERSION != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          VERSION="${VERSION#v}"
-          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Not a version: $VERSION" >&2; exit 1; }
+          VERSION=$(tr -d '[:space:]' < VERSION)
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::VERSION must be X.Y.Z, got '$VERSION'"; exit 1; }
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          if [[ "$GITHUB_REF" != refs/heads/main || "$GITHUB_EVENT_NAME" == pull_request ]]; then
+            echo "RELEASE=false" >> "$GITHUB_ENV"
+          elif gh release view "v$VERSION" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "v$VERSION is already released; bump VERSION to release again."
+            echo "RELEASE=false" >> "$GITHUB_ENV"
+          else
+            echo "Releasing v$VERSION"
+            echo "RELEASE=true" >> "$GITHUB_ENV"
+          fi
 
       - name: Toolchain
         run: swift --version
@@ -64,18 +75,21 @@ jobs:
           security find-identity -v -p codesigning "$KEYCHAIN"
           rm -f "$RUNNER_TEMP/certificate.p12"
 
-      # Signs with Developer ID when the certificate is available; notarizes only on release tags.
+      # Signs with Developer ID when the certificate is available; notarizes only releases.
       - name: Build
         env:
           SIGN_IDENTITY: "${{ env.HAS_CERTIFICATE == 'true' && 'Developer ID Application: FERMIN GUADALUPE VILLANUEVA SALAS (4L3BNUJJZJ)' || '' }}"
-          APPLE_ID: ${{ env.VERSION != '' && secrets.APPLE_ID || '' }}
-          APPLE_PASSWORD: ${{ env.VERSION != '' && secrets.APPLE_PASSWORD || '' }}
+          APPLE_ID: ${{ env.RELEASE == 'true' && env.HAS_CERTIFICATE == 'true' && secrets.APPLE_ID || '' }}
+          APPLE_PASSWORD: ${{ env.RELEASE == 'true' && env.HAS_CERTIFICATE == 'true' && secrets.APPLE_PASSWORD || '' }}
           APPLE_TEAM_ID: 4L3BNUJJZJ
-        run: scripts/build.sh
+        run: |
+          if [[ "$RELEASE" == true && "$HAS_CERTIFICATE" != true ]]; then
+            echo "::warning::No APPLE_CERTIFICATE secret: this release is ad-hoc signed and Gatekeeper will warn on first launch."
+          fi
+          scripts/build.sh
 
-      # Creates the vX.Y.Z tag on this commit too when the release was started from the Actions tab.
       - name: Create release
-        if: env.VERSION != ''
+        if: env.RELEASE == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -83,10 +97,14 @@ jobs:
             --title "Tunnels $VERSION" --generate-notes
 
       - name: Update cask in the tap
-        if: env.VERSION != ''
+        if: env.RELEASE == 'true'
         env:
           TAP_DEPLOY_KEY: ${{ secrets.TAP_DEPLOY_KEY }}
         run: |
+          if [[ "$HAS_TAP_KEY" != true ]]; then
+            echo "::warning::No TAP_DEPLOY_KEY secret: hyppe-cc/homebrew-tap was not updated."
+            exit 0
+          fi
           SHA=$(shasum -a 256 build/Tunnels.zip | cut -d' ' -f1)
 
           mkdir -p ~/.ssh
@@ -105,4 +123,3 @@ jobs:
           git add Casks/tunnels.rb
           git commit -m "tunnels $VERSION"
           git push
-
