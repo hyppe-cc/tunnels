@@ -69,8 +69,9 @@ swift test
 scripts/release.sh 1.0.0
 ```
 
-Pushing the tag makes the GitHub Action sign and notarize the app, create the release and update
-the cask in [hyppe-cc/homebrew-tap](https://github.com/hyppe-cc/homebrew-tap).
+Pushing the tag makes the GitHub Action sign and notarize the app, create the release, update
+the cask in [hyppe-cc/homebrew-tap](https://github.com/hyppe-cc/homebrew-tap) and post the release
+to X (`scripts/post-release.py`, skipped unless the `X_*` secrets are set).
 
 ## License
 

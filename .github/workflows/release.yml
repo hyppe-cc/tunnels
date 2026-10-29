@@ -1,5 +1,6 @@
 # On every push to main: test, build and sign to check that everything works.
-# On pushing a vX.Y.Z tag: also notarize, create the GitHub release and update the cask in hyppe-cc/homebrew-tap.
+# On pushing a vX.Y.Z tag: also notarize, create the GitHub release, update the cask in hyppe-cc/homebrew-tap
+# and post the release to X.
 name: Release
 
 on:
@@ -92,3 +93,14 @@ jobs:
           git add Casks/tunnels.rb
           git commit -m "tunnels $VERSION"
           git push
+
+      # Last, so a failed post never blocks the release. Skips itself without the X secrets.
+      - name: Post to X
+        if: startsWith(github.ref, 'refs/tags/v')
+        continue-on-error: true
+        env:
+          X_API_KEY: ${{ secrets.X_API_KEY }}
+          X_API_SECRET: ${{ secrets.X_API_SECRET }}
+          X_ACCESS_TOKEN: ${{ secrets.X_ACCESS_TOKEN }}
+          X_ACCESS_TOKEN_SECRET: ${{ secrets.X_ACCESS_TOKEN_SECRET }}
+        run: VERSION="${GITHUB_REF_NAME#v}" scripts/post-release.py
