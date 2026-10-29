@@ -23,12 +23,25 @@ jobs:
   build:
     # Liquid Glass needs the macOS 26 SDK.
     runs-on: macos-26
-    env:
-      HAS_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE != '' }}
-      HAS_NOTARY: ${{ secrets.APPLE_ID != '' && secrets.APPLE_PASSWORD != '' }}
-      HAS_TAP_KEY: ${{ secrets.TAP_DEPLOY_KEY != '' }}
     steps:
       - uses: actions/checkout@v5
+
+      # Which secrets are usable. Prints lengths only, never values, to make empty ones obvious.
+      - name: Check secrets
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          TAP_DEPLOY_KEY: ${{ secrets.TAP_DEPLOY_KEY }}
+        run: |
+          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_ID APPLE_PASSWORD TAP_DEPLOY_KEY; do
+            value="${!name}"
+            echo "$name: ${#value} characters"
+          done
+          flag() { [[ -n "$1" ]] && echo true || echo false; }
+          echo "HAS_CERTIFICATE=$(flag "$APPLE_CERTIFICATE")" >> "$GITHUB_ENV"
+          echo "HAS_TAP_KEY=$(flag "$TAP_DEPLOY_KEY")" >> "$GITHUB_ENV"
 
       # RELEASE=true when this is main and v<VERSION> hasn't been released yet.
       - name: Check version
