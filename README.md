@@ -66,12 +66,12 @@ swift test
 ## Release
 
 ```sh
-scripts/release.sh 1.0.0
+scripts/release.sh 1.0.0                         # pushes the v1.0.0 tag
+gh workflow run release.yml -f version=1.0.0     # or from the Actions tab: Release → Run workflow
 ```
 
-Pushing the tag makes the GitHub Action sign and notarize the app, create the release, update
-the cask in [hyppe-cc/homebrew-tap](https://github.com/hyppe-cc/homebrew-tap) and post the release
-to X (`scripts/post-release.py`, skipped unless the `X_*` secrets are set).
+Either way the GitHub Action signs and notarizes the app, creates the release with `Tunnels.zip`
+and updates the cask in [hyppe-cc/homebrew-tap](https://github.com/hyppe-cc/homebrew-tap).
 
 ## License
 
